@@ -21,7 +21,37 @@ input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; }
 <script type="text/babel">
 const { useState, useEffect } = React;
 
-// ── VÒNG & TIỀN CƯỢC CỐ ĐỊNH ─────────────────────────────────────────────────
+// ── Google Sheets storage (thay window.storage bằng GS) ──────────────────────
+const GS_URL = "https://script.google.com/macros/s/AKfycbwl0TtN4dp9nXbLKPglAU6y2LEtgRr_yeruuzjymUY9tZphaIPP-8UitF4zMh6UZO--/exec";
+const _cache = {};
+async function sGet(key) {
+  if(_cache[key]!==undefined) return _cache[key];
+  try{
+    const r=await fetch(GS_URL+"?action=get&key="+key);
+    const j=await r.json();
+    const val=j.value?JSON.parse(j.value):null;
+    _cache[key]=val; return val;
+  }catch{return null;}
+}
+async function sSet(key,val) {
+  _cache[key]=val;
+  try{ await fetch(GS_URL+"?action=set&key="+key+"&val="+encodeURIComponent(JSON.stringify(val))); }catch{}
+}
+async function sGetAll() {
+  try{
+    const r=await fetch(GS_URL+"?action=getall");
+    const j=await r.json();
+    if(!j.ok) return {};
+    const out={};
+    for(const[k,v] of Object.entries(j.data)){
+      try{out[k]=v?JSON.parse(v):null;}catch{out[k]=null;}
+    }
+    return out;
+  }catch{return {};}
+}
+
+import { useState, useEffect } from "react";
+
 const ROUNDS = {
   group: { label:"Vòng bảng",  stake:1 },
   r32:   { label:"Vòng 1/32", stake:2 },
@@ -31,10 +61,7 @@ const ROUNDS = {
   final: { label:"Chung kết", stake:6 },
 };
 
-// ── TÍNH KẾT QUẢ KÈO CHẤP ────────────────────────────────────────────────────
-// Trả về: "win" | "lose" | "half_win" | "half_lose" | "push"
 function calcOutcome(hs, as, handicap, pick) {
-  // kèo nửa bàn (0.25, 0.75): tách 2 kèo
   const frac = Math.abs(handicap) % 0.5;
   if (frac === 0.25) {
     const sign = handicap >= 0 ? 1 : -1;
@@ -49,123 +76,111 @@ function calcOutcome(hs, as, handicap, pick) {
   const adj = hs + handicap - as;
   const hr = adj > 0 ? "win" : adj < 0 ? "lose" : "push";
   if (pick==="home") return hr;
-  if (hr==="win")  return "lose";
+  if (hr==="win") return "lose";
   if (hr==="lose") return "win";
   return "push";
 }
 
-// ── TÍNH TIỀN CỐ ĐỊNH (không nhân tỉ lệ) ────────────────────────────────────
 function calcProfit(outcome, stake) {
   if (outcome==="win")       return  stake;
   if (outcome==="lose")      return -stake;
   if (outcome==="half_win")  return  Math.round(stake/2);
   if (outcome==="half_lose") return -Math.round(stake/2);
-  return 0; // push
+  return 0;
 }
 
 const OD = {
-  win:       { label:"Thắng kèo",    color:"#10b981", bg:"#064e3b", icon:"✅" },
-  half_win:  { label:"Thắng nửa",    color:"#34d399", bg:"#065f46", icon:"✅" },
-  lose:      { label:"Thua kèo",     color:"#ef4444", bg:"#450a0a", icon:"❌" },
-  half_lose: { label:"Thua nửa",     color:"#f87171", bg:"#4c0519", icon:"❌" },
-  push:      { label:"Hoà (hoàn)",   color:"#94a3b8", bg:"#1e293b", icon:"↩️" },
+  win:       { label:"Thắng kèo",  color:"#10b981", bg:"#064e3b", icon:"✅" },
+  half_win:  { label:"Thắng nửa",  color:"#34d399", bg:"#065f46", icon:"✅" },
+  lose:      { label:"Thua kèo",   color:"#ef4444", bg:"#450a0a", icon:"❌" },
+  half_lose: { label:"Thua nửa",   color:"#f87171", bg:"#4c0519", icon:"❌" },
+  push:      { label:"Hoà (hoàn)", color:"#94a3b8", bg:"#1e293b", icon:"↩️" },
 };
 
 const hLabel = h => h===0?"Đồng banh":h>0?`+${h}`:`${h}`;
-const fmtK   = n => (n>=0?"+":"")+n+" cốc bia";
-const fmt    = n => (n>=0?"+":"")+n+" cốc bia";
+const fmtC   = n => (n>=0?"+":"")+n+" cốc";
 const PC = { home:"#10b981", away:"#f43f5e" };
 const PB = { home:"#064e3b", away:"#4c0519" };
 
-// ── 36 TRẬN VÒNG BẢNG ────────────────────────────────────────────────────────
 const GROUP_MATCHES = [
-  // GROUP A
-  { id:"g01", round:"group", date:"12/06", time:"02:00", group:"A", home:"🇲🇽 Mexico",        away:"🇿🇦 Nam Phi",        handicap:-1.0 },
-  { id:"g02", round:"group", date:"15/06", time:"02:00", group:"A", home:"🇰🇷 Hàn Quốc",      away:"🇨🇿 CH Séc",         handicap: 0.5 },
-  { id:"g03", round:"group", date:"18/06", time:"23:00", group:"A", home:"🇨🇿 CH Séc",         away:"🇿🇦 Nam Phi",        handicap:-0.5 },
-  { id:"g04", round:"group", date:"19/06", time:"08:00", group:"A", home:"🇲🇽 Mexico",        away:"🇰🇷 Hàn Quốc",       handicap:-0.5 },
-  { id:"g05", round:"group", date:"24/06", time:"05:00", group:"A", home:"🇨🇿 CH Séc",         away:"🇲🇽 Mexico",        handicap: 0.5 },
-  { id:"g06", round:"group", date:"24/06", time:"05:00", group:"A", home:"🇿🇦 Nam Phi",        away:"🇰🇷 Hàn Quốc",      handicap: 1.0 },
-  // GROUP B
-  { id:"g07", round:"group", date:"12/06", time:"23:00", group:"B", home:"🇨🇦 Canada",         away:"🇧🇦 Bosnia",         handicap:-0.5 },
-  { id:"g08", round:"group", date:"13/06", time:"05:00", group:"B", home:"🇨🇭 Thụy Sĩ",        away:"🇶🇦 Qatar",          handicap:-1.5 },
-  { id:"g09", round:"group", date:"19/06", time:"02:00", group:"B", home:"🇨🇭 Thụy Sĩ",        away:"🇧🇦 Bosnia",         handicap:-0.5 },
-  { id:"g10", round:"group", date:"19/06", time:"05:00", group:"B", home:"🇨🇦 Canada",         away:"🇶🇦 Qatar",          handicap:-1.0 },
-  { id:"g11", round:"group", date:"24/06", time:"01:00", group:"B", home:"🇧🇦 Bosnia",         away:"🇶🇦 Qatar",          handicap:-0.5 },
-  { id:"g12", round:"group", date:"24/06", time:"01:00", group:"B", home:"🇨🇦 Canada",         away:"🇨🇭 Thụy Sĩ",        handicap: 0.5 },
-  // GROUP C
-  { id:"g13", round:"group", date:"13/06", time:"02:00", group:"C", home:"🇺🇸 USA",            away:"🇵🇾 Paraguay",       handicap:-0.5 },
-  { id:"g14", round:"group", date:"14/06", time:"05:00", group:"C", home:"🇦🇺 Úc",             away:"🇹🇷 Thổ Nhĩ Kỳ",    handicap: 0.5 },
-  { id:"g15", round:"group", date:"20/06", time:"02:00", group:"C", home:"🇺🇸 USA",            away:"🇦🇺 Úc",             handicap:-0.5 },
-  { id:"g16", round:"group", date:"20/06", time:"05:00", group:"C", home:"🇹🇷 Thổ Nhĩ Kỳ",    away:"🇵🇾 Paraguay",       handicap: 0.0 },
-  { id:"g17", round:"group", date:"25/06", time:"02:00", group:"C", home:"🇺🇸 USA",            away:"🇹🇷 Thổ Nhĩ Kỳ",    handicap:-0.5 },
-  { id:"g18", round:"group", date:"25/06", time:"02:00", group:"C", home:"🇵🇾 Paraguay",       away:"🇦🇺 Úc",             handicap: 0.5 },
-  // GROUP D
-  { id:"g19", round:"group", date:"14/06", time:"08:00", group:"D", home:"🇧🇷 Brazil",         away:"🇭🇹 Haiti",          handicap:-3.5 },
-  { id:"g20", round:"group", date:"15/06", time:"02:00", group:"D", home:"🇳🇱 Hà Lan",         away:"🇷🇸 Serbia",         handicap:-1.0 },
-  { id:"g21", round:"group", date:"20/06", time:"08:00", group:"D", home:"🇧🇷 Brazil",         away:"🇷🇸 Serbia",         handicap:-1.5 },
-  { id:"g22", round:"group", date:"20/06", time:"11:00", group:"D", home:"🇳🇱 Hà Lan",         away:"🇭🇹 Haiti",          handicap:-3.0 },
-  { id:"g23", round:"group", date:"25/06", time:"05:00", group:"D", home:"🇧🇷 Brazil",         away:"🇳🇱 Hà Lan",         handicap:-0.5 },
-  { id:"g24", round:"group", date:"25/06", time:"05:00", group:"D", home:"🇷🇸 Serbia",         away:"🇭🇹 Haiti",          handicap:-2.0 },
-  // GROUP E
-  { id:"g25", round:"group", date:"15/06", time:"05:00", group:"E", home:"🇨🇮 Bờ Biển Ngà",   away:"🇪🇨 Ecuador",        handicap: 0.5 },
-  { id:"g26", round:"group", date:"15/06", time:"08:00", group:"E", home:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",     away:"🇲🇦 Morocco",        handicap: 0.5 },
-  { id:"g27", round:"group", date:"20/06", time:"23:00", group:"E", home:"🇲🇦 Morocco",        away:"🇪🇨 Ecuador",        handicap:-0.5 },
-  { id:"g28", round:"group", date:"21/06", time:"02:00", group:"E", home:"🇨🇮 Bờ Biển Ngà",   away:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",    handicap:-0.5 },
-  { id:"g29", round:"group", date:"26/06", time:"02:00", group:"E", home:"🇲🇦 Morocco",        away:"🇨🇮 Bờ Biển Ngà",   handicap:-0.5 },
-  { id:"g30", round:"group", date:"26/06", time:"02:00", group:"E", home:"🇪🇨 Ecuador",        away:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",    handicap:-0.5 },
-  // GROUP F
-  { id:"g31", round:"group", date:"13/06", time:"02:00", group:"F", home:"🇸🇪 Thụy Điển",      away:"🇹🇳 Tunisia",        handicap:-1.0 },
-  { id:"g32", round:"group", date:"14/06", time:"23:00", group:"F", home:"🇩🇪 Đức",             away:"🇨🇺 Curacao",        handicap:-3.5 },
-  { id:"g33", round:"group", date:"20/06", time:"05:00", group:"F", home:"🇩🇪 Đức",             away:"🇹🇳 Tunisia",        handicap:-2.0 },
-  { id:"g34", round:"group", date:"20/06", time:"08:00", group:"F", home:"🇸🇪 Thụy Điển",      away:"🇨🇺 Curacao",        handicap:-2.5 },
-  { id:"g35", round:"group", date:"25/06", time:"01:00", group:"F", home:"🇩🇪 Đức",             away:"🇸🇪 Thụy Điển",     handicap:-0.5 },
-  { id:"g36", round:"group", date:"25/06", time:"01:00", group:"F", home:"🇹🇳 Tunisia",         away:"🇨🇺 Curacao",        handicap:-1.0 },
-  // GROUP G
-  { id:"g37", round:"group", date:"16/06", time:"02:00", group:"G", home:"🇧🇪 Bỉ",             away:"🇪🇬 Ai Cập",         handicap:-1.5 },
-  { id:"g38", round:"group", date:"16/06", time:"08:00", group:"G", home:"🇮🇷 Iran",            away:"🇳🇿 New Zealand",    handicap:-0.5 },
-  { id:"g39", round:"group", date:"21/06", time:"02:00", group:"G", home:"🇧🇪 Bỉ",             away:"🇮🇷 Iran",           handicap:-1.0 },
-  { id:"g40", round:"group", date:"21/06", time:"05:00", group:"G", home:"🇪🇬 Ai Cập",         away:"🇳🇿 New Zealand",    handicap:-1.0 },
-  { id:"g41", round:"group", date:"26/06", time:"05:00", group:"G", home:"🇧🇪 Bỉ",             away:"🇳🇿 New Zealand",    handicap:-2.0 },
-  { id:"g42", round:"group", date:"26/06", time:"05:00", group:"G", home:"🇮🇷 Iran",            away:"🇪🇬 Ai Cập",         handicap: 0.5 },
-  // GROUP H
-  { id:"g43", round:"group", date:"15/06", time:"23:00", group:"H", home:"🇪🇸 TBN",            away:"🇨🇻 Cabo Verde",     handicap:-2.5 },
-  { id:"g44", round:"group", date:"16/06", time:"05:00", group:"H", home:"🇸🇦 Ả Rập XĐ",       away:"🇺🇾 Uruguay",        handicap: 0.5 },
-  { id:"g45", round:"group", date:"21/06", time:"23:00", group:"H", home:"🇪🇸 TBN",            away:"🇸🇦 Ả Rập XĐ",      handicap:-1.5 },
-  { id:"g46", round:"group", date:"22/06", time:"02:00", group:"H", home:"🇺🇾 Uruguay",         away:"🇨🇻 Cabo Verde",     handicap:-1.5 },
-  { id:"g47", round:"group", date:"27/06", time:"02:00", group:"H", home:"🇨🇻 Cabo Verde",      away:"🇸🇦 Ả Rập XĐ",      handicap: 1.0 },
-  { id:"g48", round:"group", date:"27/06", time:"02:00", group:"H", home:"🇺🇾 Uruguay",         away:"🇪🇸 TBN",            handicap: 1.5 },
-  // GROUP I
-  { id:"g49", round:"group", date:"17/06", time:"02:00", group:"I", home:"🇫🇷 Pháp",            away:"🇸🇳 Senegal",        handicap:-1.0 },
-  { id:"g50", round:"group", date:"17/06", time:"05:00", group:"I", home:"🇮🇶 Iraq",            away:"🇳🇴 Na Uy",          handicap: 1.0 },
-  { id:"g51", round:"group", date:"22/06", time:"05:00", group:"I", home:"🇫🇷 Pháp",            away:"🇮🇶 Iraq",           handicap:-2.5 },
-  { id:"g52", round:"group", date:"22/06", time:"08:00", group:"I", home:"🇳🇴 Na Uy",           away:"🇸🇳 Senegal",        handicap:-0.5 },
-  { id:"g53", round:"group", date:"27/06", time:"05:00", group:"I", home:"🇫🇷 Pháp",            away:"🇳🇴 Na Uy",          handicap:-0.5 },
-  { id:"g54", round:"group", date:"27/06", time:"05:00", group:"I", home:"🇸🇳 Senegal",         away:"🇮🇶 Iraq",           handicap:-1.0 },
-  // GROUP J
-  { id:"g55", round:"group", date:"17/06", time:"08:00", group:"J", home:"🇦🇷 Argentina",       away:"🇩🇿 Algeria",        handicap:-2.0 },
-  { id:"g56", round:"group", date:"17/06", time:"11:00", group:"J", home:"🇦🇹 Áo",              away:"🇯🇴 Jordan",         handicap:-1.5 },
-  { id:"g57", round:"group", date:"22/06", time:"01:00", group:"J", home:"🇦🇷 Argentina",       away:"🇦🇹 Áo",             handicap:-1.5 },
-  { id:"g58", round:"group", date:"22/06", time:"11:00", group:"J", home:"🇯🇴 Jordan",          away:"🇩🇿 Algeria",        handicap: 0.5 },
-  { id:"g59", round:"group", date:"28/06", time:"02:00", group:"J", home:"🇯🇴 Jordan",          away:"🇦🇷 Argentina",      handicap: 2.5 },
-  { id:"g60", round:"group", date:"28/06", time:"02:00", group:"J", home:"🇩🇿 Algeria",         away:"🇦🇹 Áo",             handicap: 0.5 },
-  // GROUP K
-  { id:"g61", round:"group", date:"18/06", time:"00:00", group:"K", home:"🇵🇹 Bồ Đào Nha",     away:"🇨🇩 Congo DR",       handicap:-2.0 },
-  { id:"g62", round:"group", date:"18/06", time:"09:00", group:"K", home:"🇺🇿 Uzbekistan",      away:"🇨🇴 Colombia",       handicap: 1.5 },
-  { id:"g63", round:"group", date:"23/06", time:"01:00", group:"K", home:"🇵🇹 Bồ Đào Nha",     away:"🇺🇿 Uzbekistan",     handicap:-2.5 },
-  { id:"g64", round:"group", date:"23/06", time:"10:00", group:"K", home:"🇨🇴 Colombia",        away:"🇨🇩 Congo DR",       handicap:-1.0 },
-  { id:"g65", round:"group", date:"28/06", time:"05:00", group:"K", home:"🇵🇹 Bồ Đào Nha",     away:"🇨🇴 Colombia",       handicap:-0.5 },
-  { id:"g66", round:"group", date:"28/06", time:"05:00", group:"K", home:"🇨🇩 Congo DR",        away:"🇺🇿 Uzbekistan",     handicap:-0.5 },
-  // GROUP L
-  { id:"g67", round:"group", date:"18/06", time:"03:00", group:"L", home:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",          away:"🇭🇷 Croatia",        handicap:-0.5 },
-  { id:"g68", round:"group", date:"18/06", time:"06:00", group:"L", home:"🇬🇭 Ghana",            away:"🇵🇦 Panama",         handicap:-0.5 },
-  { id:"g69", round:"group", date:"23/06", time:"04:00", group:"L", home:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",          away:"🇬🇭 Ghana",           handicap:-1.0 },
-  { id:"g70", round:"group", date:"23/06", time:"07:00", group:"L", home:"🇵🇦 Panama",           away:"🇭🇷 Croatia",        handicap: 1.0 },
-  { id:"g71", round:"group", date:"27/06", time:"08:00", group:"L", home:"🇵🇦 Panama",           away:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",         handicap: 2.0 },
-  { id:"g72", round:"group", date:"27/06", time:"08:00", group:"L", home:"🇭🇷 Croatia",          away:"🇬🇭 Ghana",           handicap:-0.5 },
+  { id:"g01", round:"group", date:"12/06", time:"02:00", group:"A", home:"🇲🇽 Mexico",       away:"🇿🇦 Nam Phi",       handicap:-1.0 },
+  { id:"g02", round:"group", date:"15/06", time:"02:00", group:"A", home:"🇰🇷 Hàn Quốc",     away:"🇨🇿 CH Séc",        handicap: 0.5 },
+  { id:"g03", round:"group", date:"18/06", time:"23:00", group:"A", home:"🇨🇿 CH Séc",        away:"🇿🇦 Nam Phi",       handicap:-0.5 },
+  { id:"g04", round:"group", date:"19/06", time:"08:00", group:"A", home:"🇲🇽 Mexico",       away:"🇰🇷 Hàn Quốc",      handicap:-0.5 },
+  { id:"g05", round:"group", date:"24/06", time:"05:00", group:"A", home:"🇨🇿 CH Séc",        away:"🇲🇽 Mexico",       handicap: 0.5 },
+  { id:"g06", round:"group", date:"24/06", time:"05:00", group:"A", home:"🇿🇦 Nam Phi",       away:"🇰🇷 Hàn Quốc",     handicap: 1.0 },
+  { id:"g07", round:"group", date:"12/06", time:"23:00", group:"B", home:"🇨🇦 Canada",        away:"🇧🇦 Bosnia",        handicap:-0.5 },
+  { id:"g08", round:"group", date:"13/06", time:"05:00", group:"B", home:"🇨🇭 Thụy Sĩ",       away:"🇶🇦 Qatar",         handicap:-1.5 },
+  { id:"g09", round:"group", date:"19/06", time:"02:00", group:"B", home:"🇨🇭 Thụy Sĩ",       away:"🇧🇦 Bosnia",        handicap:-0.5 },
+  { id:"g10", round:"group", date:"19/06", time:"05:00", group:"B", home:"🇨🇦 Canada",        away:"🇶🇦 Qatar",         handicap:-1.0 },
+  { id:"g11", round:"group", date:"24/06", time:"01:00", group:"B", home:"🇧🇦 Bosnia",        away:"🇶🇦 Qatar",         handicap:-0.5 },
+  { id:"g12", round:"group", date:"24/06", time:"01:00", group:"B", home:"🇨🇦 Canada",        away:"🇨🇭 Thụy Sĩ",       handicap: 0.5 },
+  { id:"g13", round:"group", date:"12/06", time:"21:00", group:"D", home:"🇺🇸 USA",           away:"🇵🇾 Paraguay",      handicap:-0.5 },
+  { id:"g14", round:"group", date:"13/06", time:"00:00", group:"D", home:"🇦🇺 Úc",            away:"🇹🇷 Thổ Nhĩ Kỳ",   handicap: 0.5 },
+  { id:"g15", round:"group", date:"19/06", time:"15:00", group:"D", home:"🇺🇸 USA",           away:"🇦🇺 Úc",            handicap:-0.5 },
+  { id:"g16", round:"group", date:"20/06", time:"03:00", group:"D", home:"🇹🇷 Thổ Nhĩ Kỳ",   away:"🇵🇾 Paraguay",      handicap: 0.0 },
+  { id:"g17", round:"group", date:"25/06", time:"21:00", group:"D", home:"🇺🇸 USA",           away:"🇹🇷 Thổ Nhĩ Kỳ",   handicap:-0.5 },
+  { id:"g18", round:"group", date:"25/06", time:"21:00", group:"D", home:"🇵🇾 Paraguay",      away:"🇦🇺 Úc",            handicap: 0.5 },
+  // (Brazil->C, Netherlands->F - removed wrong entries)
+  // GROUP C: Brazil, Morocco, Scotland, Haiti (fix lại)
+  { id:"g25", round:"group", date:"13/06", time:"02:00", group:"C", home:"🇧🇷 Brazil",         away:"🇲🇦 Morocco",       handicap:-0.5 },
+  { id:"g26", round:"group", date:"13/06", time:"05:00", group:"C", home:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",    away:"🇭🇹 Haiti",         handicap:-0.5 },
+  { id:"g27", round:"group", date:"19/06", time:"18:00", group:"C", home:"🇧🇷 Brazil",         away:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",   handicap:-1.0 },
+  { id:"g28", round:"group", date:"19/06", time:"21:00", group:"C", home:"🇲🇦 Morocco",        away:"🇭🇹 Haiti",         handicap:-2.0 },
+  { id:"g29", round:"group", date:"25/06", time:"00:00", group:"C", home:"🇧🇷 Brazil",         away:"🇭🇹 Haiti",         handicap:-3.5 },
+  { id:"g30", round:"group", date:"25/06", time:"00:00", group:"C", home:"🇲🇦 Morocco",        away:"🏴󠁧󠁢󠁳󠁣󠁴󠁿 Scotland",   handicap:-0.5 },
+  // GROUP E: Germany, Ivory Coast, Ecuador, Curacao
+  { id:"g31", round:"group", date:"14/06", time:"20:00", group:"E", home:"🇩🇪 Đức",            away:"🇨🇺 Curacao",       handicap:-3.5 },
+  { id:"g32", round:"group", date:"14/06", time:"23:00", group:"E", home:"🇨🇮 Bờ Biển Ngà",   away:"🇪🇨 Ecuador",       handicap:-0.5 },
+  { id:"g33", round:"group", date:"20/06", time:"19:00", group:"E", home:"🇩🇪 Đức",            away:"🇨🇮 Bờ Biển Ngà",  handicap:-0.5 },
+  { id:"g34", round:"group", date:"21/06", time:"00:00", group:"E", home:"🇪🇨 Ecuador",        away:"🇨🇺 Curacao",       handicap:-1.5 },
+  { id:"g35", round:"group", date:"26/06", time:"05:00", group:"E", home:"🇩🇪 Đức",            away:"🇪🇨 Ecuador",       handicap:-0.5 },
+  { id:"g36", round:"group", date:"26/06", time:"05:00", group:"E", home:"🇨🇮 Bờ Biển Ngà",   away:"🇨🇺 Curacao",       handicap:-2.0 },
+  // GROUP F: Netherlands, Japan, Sweden, Tunisia
+  { id:"gf1", round:"group", date:"14/06", time:"21:00", group:"F", home:"🇳🇱 Hà Lan",         away:"🇯🇵 Nhật Bản",      handicap:-0.5 },
+  { id:"gf2", round:"group", date:"14/06", time:"21:00", group:"F", home:"🇸🇪 Thụy Điển",      away:"🇹🇳 Tunisia",       handicap:-1.0 },
+  { id:"gf3", round:"group", date:"20/06", time:"18:00", group:"F", home:"🇳🇱 Hà Lan",         away:"🇸🇪 Thụy Điển",    handicap:-0.5 },
+  { id:"gf4", round:"group", date:"21/06", time:"00:00", group:"F", home:"🇹🇳 Tunisia",        away:"🇯🇵 Nhật Bản",      handicap: 0.5 },
+  { id:"gf5", round:"group", date:"26/06", time:"00:00", group:"F", home:"🇯🇵 Nhật Bản",       away:"🇸🇪 Thụy Điển",    handicap: 0.5 },
+  { id:"gf6", round:"group", date:"26/06", time:"00:00", group:"F", home:"🇹🇳 Tunisia",        away:"🇳🇱 Hà Lan",        handicap: 1.0 },
+  { id:"g37", round:"group", date:"16/06", time:"02:00", group:"G", home:"🇧🇪 Bỉ",            away:"🇪🇬 Ai Cập",        handicap:-1.5 },
+  { id:"g38", round:"group", date:"16/06", time:"08:00", group:"G", home:"🇮🇷 Iran",           away:"🇳🇿 New Zealand",   handicap:-0.5 },
+  { id:"g39", round:"group", date:"21/06", time:"02:00", group:"G", home:"🇧🇪 Bỉ",            away:"🇮🇷 Iran",          handicap:-1.0 },
+  { id:"g40", round:"group", date:"21/06", time:"05:00", group:"G", home:"🇪🇬 Ai Cập",        away:"🇳🇿 New Zealand",   handicap:-1.0 },
+  { id:"g41", round:"group", date:"26/06", time:"05:00", group:"G", home:"🇧🇪 Bỉ",            away:"🇳🇿 New Zealand",   handicap:-2.0 },
+  { id:"g42", round:"group", date:"26/06", time:"05:00", group:"G", home:"🇮🇷 Iran",           away:"🇪🇬 Ai Cập",        handicap: 0.5 },
+  { id:"g43", round:"group", date:"15/06", time:"23:00", group:"H", home:"🇪🇸 TBN",           away:"🇨🇻 Cabo Verde",    handicap:-2.5 },
+  { id:"g44", round:"group", date:"16/06", time:"05:00", group:"H", home:"🇸🇦 Ả Rập XĐ",      away:"🇺🇾 Uruguay",       handicap: 0.5 },
+  { id:"g45", round:"group", date:"21/06", time:"23:00", group:"H", home:"🇪🇸 TBN",           away:"🇸🇦 Ả Rập XĐ",     handicap:-1.5 },
+  { id:"g46", round:"group", date:"22/06", time:"02:00", group:"H", home:"🇺🇾 Uruguay",        away:"🇨🇻 Cabo Verde",    handicap:-1.5 },
+  { id:"g47", round:"group", date:"27/06", time:"02:00", group:"H", home:"🇨🇻 Cabo Verde",     away:"🇸🇦 Ả Rập XĐ",     handicap: 1.0 },
+  { id:"g48", round:"group", date:"27/06", time:"02:00", group:"H", home:"🇺🇾 Uruguay",        away:"🇪🇸 TBN",           handicap: 1.5 },
+  { id:"g49", round:"group", date:"17/06", time:"02:00", group:"I", home:"🇫🇷 Pháp",           away:"🇸🇳 Senegal",       handicap:-1.0 },
+  { id:"g50", round:"group", date:"17/06", time:"05:00", group:"I", home:"🇮🇶 Iraq",           away:"🇳🇴 Na Uy",         handicap: 1.0 },
+  { id:"g51", round:"group", date:"22/06", time:"05:00", group:"I", home:"🇫🇷 Pháp",           away:"🇮🇶 Iraq",          handicap:-2.5 },
+  { id:"g52", round:"group", date:"22/06", time:"08:00", group:"I", home:"🇳🇴 Na Uy",          away:"🇸🇳 Senegal",       handicap:-0.5 },
+  { id:"g53", round:"group", date:"27/06", time:"05:00", group:"I", home:"🇫🇷 Pháp",           away:"🇳🇴 Na Uy",         handicap:-0.5 },
+  { id:"g54", round:"group", date:"27/06", time:"05:00", group:"I", home:"🇸🇳 Senegal",        away:"🇮🇶 Iraq",          handicap:-1.0 },
+  { id:"g55", round:"group", date:"17/06", time:"08:00", group:"J", home:"🇦🇷 Argentina",      away:"🇩🇿 Algeria",       handicap:-2.0 },
+  { id:"g56", round:"group", date:"17/06", time:"11:00", group:"J", home:"🇦🇹 Áo",             away:"🇯🇴 Jordan",        handicap:-1.5 },
+  { id:"g57", round:"group", date:"22/06", time:"01:00", group:"J", home:"🇦🇷 Argentina",      away:"🇦🇹 Áo",            handicap:-1.5 },
+  { id:"g58", round:"group", date:"22/06", time:"11:00", group:"J", home:"🇯🇴 Jordan",         away:"🇩🇿 Algeria",       handicap: 0.5 },
+  { id:"g59", round:"group", date:"28/06", time:"02:00", group:"J", home:"🇯🇴 Jordan",         away:"🇦🇷 Argentina",     handicap: 2.5 },
+  { id:"g60", round:"group", date:"28/06", time:"02:00", group:"J", home:"🇩🇿 Algeria",        away:"🇦🇹 Áo",            handicap: 0.5 },
+  { id:"g61", round:"group", date:"18/06", time:"00:00", group:"K", home:"🇵🇹 Bồ Đào Nha",    away:"🇨🇩 Congo DR",      handicap:-2.0 },
+  { id:"g62", round:"group", date:"18/06", time:"09:00", group:"K", home:"🇺🇿 Uzbekistan",     away:"🇨🇴 Colombia",      handicap: 1.5 },
+  { id:"g63", round:"group", date:"23/06", time:"01:00", group:"K", home:"🇵🇹 Bồ Đào Nha",    away:"🇺🇿 Uzbekistan",    handicap:-2.5 },
+  { id:"g64", round:"group", date:"23/06", time:"10:00", group:"K", home:"🇨🇴 Colombia",       away:"🇨🇩 Congo DR",      handicap:-1.0 },
+  { id:"g65", round:"group", date:"28/06", time:"05:00", group:"K", home:"🇵🇹 Bồ Đào Nha",    away:"🇨🇴 Colombia",      handicap:-0.5 },
+  { id:"g66", round:"group", date:"28/06", time:"05:00", group:"K", home:"🇨🇩 Congo DR",       away:"🇺🇿 Uzbekistan",    handicap:-0.5 },
+  { id:"g67", round:"group", date:"18/06", time:"03:00", group:"L", home:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",         away:"🇭🇷 Croatia",       handicap:-0.5 },
+  { id:"g68", round:"group", date:"18/06", time:"06:00", group:"L", home:"🇬🇭 Ghana",           away:"🇵🇦 Panama",        handicap:-0.5 },
+  { id:"g69", round:"group", date:"23/06", time:"04:00", group:"L", home:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",         away:"🇬🇭 Ghana",          handicap:-1.0 },
+  { id:"g70", round:"group", date:"23/06", time:"07:00", group:"L", home:"🇵🇦 Panama",          away:"🇭🇷 Croatia",       handicap: 1.0 },
+  { id:"g71", round:"group", date:"27/06", time:"08:00", group:"L", home:"🇵🇦 Panama",          away:"🏴󠁧󠁢󠁥󠁮󠁧󠁿 Anh",        handicap: 2.0 },
+  { id:"g72", round:"group", date:"27/06", time:"08:00", group:"L", home:"🇭🇷 Croatia",         away:"🇬🇭 Ghana",          handicap:-0.5 },
 ];
 
-// ── VÒNG LOẠI TRỰC TIẾP (admin nhập đội) ─────────────────────────────────────
 const KO_MATCHES = [
   { id:"k01",round:"r32", date:"29/06",time:"02:00",slot:"R32-1", label:"Nhất A vs Nhì B" },
   { id:"k02",round:"r32", date:"29/06",time:"05:00",slot:"R32-2", label:"Nhất C vs Nhì D" },
@@ -197,47 +212,34 @@ const KO_MATCHES = [
   { id:"k28",round:"qf",  date:"11/07",time:"05:00",slot:"QF-4",  label:"Thắng R16-7 vs Thắng R16-8" },
   { id:"k29",round:"sf",  date:"14/07",time:"02:00",slot:"SF-1",  label:"Thắng QF-1 vs Thắng QF-2" },
   { id:"k30",round:"sf",  date:"15/07",time:"02:00",slot:"SF-2",  label:"Thắng QF-3 vs Thắng QF-4" },
-  { id:"k31",round:"final",date:"18/07",time:"02:00",slot:"3RD",  label:"Hạng 3: Thua SF-1 vs Thua SF-2" },
-  { id:"k32",round:"final",date:"19/07",time:"02:00",slot:"CK",   label:"Chung kết: Thắng SF-1 vs Thắng SF-2" },
+  { id:"k31",round:"final",date:"18/07",time:"02:00",slot:"3RD",  label:"Hạng 3" },
+  { id:"k32",round:"final",date:"19/07",time:"02:00",slot:"CK",   label:"Chung kết" },
 ];
 
 const ALL_MATCHES = [...GROUP_MATCHES, ...KO_MATCHES];
 
-// ── Google Sheets Storage ────────────────────────────────────────────────────
-// ⚠️ THAY URL NÀY sau khi deploy Apps Script
-const GS_URL = "https://script.google.com/macros/s/AKfycbwl0TtN4dp9nXbLKPglAU6y2LEtgRr_yeruuzjymUY9tZphaIPP-8UitF4zMh6UZO--/exec";
+// ── Persistent shared storage ────────────────────────────────────────────────
 const KEYS = { p:"wc26_p", v:"wc26_v", r:"wc26_r", k:"wc26_k" };
-const _cache = {};
 
-async function gsGet(key) {
-  if(_cache[key]!==undefined) return _cache[key];
-  try{
-    const res=await fetch(GS_URL+"?action=get&key="+key);
-    const j=await res.json();
-    const val=j.value?JSON.parse(j.value):null;
-    _cache[key]=val; return val;
-  }catch{return null;}
+async function sGet(key) {
+  try { const r = await window.storage.get(key, true); return r ? JSON.parse(r.value) : null; }
+  catch { return null; }
 }
-async function gsSet(key,val) {
-  _cache[key]=val;
-  try{
-    await fetch(GS_URL+"?action=set&key="+key+"&val="+encodeURIComponent(JSON.stringify(val)));
-  }catch{}
+async function sSet(key, val) {
+  try { await window.storage.set(key, JSON.stringify(val), true); } catch {}
 }
-async function gsGetAll() {
-  try{
-    const res=await fetch(GS_URL+"?action=getall");
-    const j=await res.json();
-    if(!j.ok) return null;
-    const out={};
-    for(const[k,v] of Object.entries(j.data)){
-      try{out[k]=v?JSON.parse(v):null;}catch{out[k]=null;}
-    }
+async function sGetAll() {
+  try {
+    const keys = await window.storage.list("wc26_", true);
+    const out = {};
+    await Promise.all((keys.keys || []).map(async k => {
+      try { const r = await window.storage.get(k, true); if(r) out[k] = JSON.parse(r.value); } catch {}
+    }));
     return out;
-  }catch{return null;}
+  } catch { return {}; }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 function App() {
   const [screen,   setScreen]  = useState("home");
   const [players,  setPlayers] = useState([]);
@@ -247,8 +249,8 @@ function App() {
   const [koSetup,  setKoSetup] = useState({});
   const [newName,  setNewName] = useState("");
   const [flash,    setFlash]   = useState("");
+  const [loading,  setLoading] = useState(true);
   const [syncing,  setSyncing] = useState(false);
-  const [lastSync, setLastSync]= useState(null);
   const [adminOk,  setAdminOk] = useState(false);
   const [adminPw,  setAdminPw] = useState("");
   const [scoreIn,  setScoreIn] = useState({});
@@ -256,547 +258,537 @@ function App() {
   const [roundF,   setRoundF]  = useState("group");
   const [dateF,    setDateF]   = useState("all");
   const ADMIN_PW = "wc2026";
-  const gsReady = GS_URL !== "https://script.google.com/macros/s/AKfycbwl0TtN4dp9nXbLKPglAU6y2LEtgRr_yeruuzjymUY9tZphaIPP-8UitF4zMh6UZO--/exec";
 
-  // load all data on mount
   useEffect(() => {
-    if(!gsReady) return;
-    setSyncing(true);
-    gsGetAll().then(all => {
-      if(all){
-        if(all[KEYS.p]) setPlayers(all[KEYS.p]);
-        if(all[KEYS.v]) setVotes(all[KEYS.v]);
-        if(all[KEYS.r]) setResults(all[KEYS.r]);
-        if(all[KEYS.k]) setKoSetup(all[KEYS.k]);
-        setLastSync(new Date());
-      }
-      setSyncing(false);
+    sGetAll().then(all => {
+      if (all[KEYS.p]) setPlayers(all[KEYS.p]);
+      if (all[KEYS.v]) setVotes(all[KEYS.v]);
+      if (all[KEYS.r]) setResults(all[KEYS.r]);
+      if (all[KEYS.k]) setKoSetup(all[KEYS.k]);
+      setLoading(false);
     });
-  },[]);
+  }, []);
 
-  // auto-refresh mỗi 30s
+  // auto-refresh mỗi 20s để thấy vote của người khác
   useEffect(() => {
-    if(!gsReady) return;
-    const id=setInterval(()=>{
-      gsGetAll().then(all=>{
-        if(all){
-          if(all[KEYS.p]) setPlayers(all[KEYS.p]);
-          if(all[KEYS.v]) setVotes(all[KEYS.v]);
-          if(all[KEYS.r]) setResults(all[KEYS.r]);
-          if(all[KEYS.k]) setKoSetup(all[KEYS.k]);
-          setLastSync(new Date());
-        }
+    const id = setInterval(() => {
+      sGetAll().then(all => {
+        if (all[KEYS.p]) setPlayers(all[KEYS.p]);
+        if (all[KEYS.v]) setVotes(all[KEYS.v]);
+        if (all[KEYS.r]) setResults(all[KEYS.r]);
+        if (all[KEYS.k]) setKoSetup(all[KEYS.k]);
       });
-    },30000);
-    return ()=>clearInterval(id);
-  },[]);
+    }, 20000);
+    return () => clearInterval(id);
+  }, []);
 
   const flash_ = msg => { setFlash(msg); setTimeout(()=>setFlash(""),2000); };
-  const syncSet = async (key,val) => { setSyncing(true); await gsSet(key,val); setSyncing(false); };
+  const sync = async (key, val) => { setSyncing(true); await sSet(key, val); setSyncing(false); };
 
-  // players
-  const addPlayer = async () => {
-    const name=newName.trim();
-    if(!name) return;
-    if(players.find(p=>p.name.toLowerCase()===name.toLowerCase())) { flash_("Tên đã tồn tại!"); return; }
-    const next=[...players,{id:"p"+Date.now(),name}];
-    setPlayers(next); setNewName(""); flash_("⏳ Đang lưu...");
-    await syncSet(KEYS.p,next); flash_("✓ Đã thêm "+name);
-  };
-  const removePl = async id => {
-    const next=players.filter(p=>p.id!==id);
-    setPlayers(next); if(activeId===id) setActiveId(null);
-    await syncSet(KEYS.p,next);
-  };
-
-  // votes
-  const handlePick = async (mid,pick) => {
-    if(!activeId) { flash_("Chọn người chơi trước!"); return; }
-    const cur=(votes[mid]||{})[activeId];
-    const newPick=cur===pick?null:pick;
-    const next={...votes,[mid]:{...(votes[mid]||{}),[activeId]:newPick}};
-    setVotes(next); flash_("⏳ Đang lưu...");
-    await syncSet(KEYS.v,next);
-    flash_(cur===pick?"↩ Bỏ chọn":"✓ Đã chọn");
-  };
-
-  // results
-  const saveResult = async mid => {
-    const s=scoreIn[mid]||{};
-    const h=parseInt(s.h??""),a=parseInt(s.a??"");
-    if(isNaN(h)||isNaN(a)||h<0||a<0) { flash_("Nhập tỉ số hợp lệ!"); return; }
-    const next={...results,[mid]:{h,a}};
-    setResults(next); flash_("⏳ Đang lưu...");
-    await syncSet(KEYS.r,next); flash_("✓ Đã lưu kết quả");
-  };
-  const clearResult = async mid => {
-    const next={...results}; delete next[mid];
-    setResults(next); await syncSet(KEYS.r,next); flash_("✓ Đã xóa");
-  };
-
-  // ko setup
-  const saveKo = async mid => {
-    const k=koIn[mid]||{};
-    if(!k.home||!k.away) { flash_("Nhập tên 2 đội!"); return; }
-    const next={...koSetup,[mid]:{home:k.home,away:k.away,handicap:parseFloat(k.handicap||"0")||0}};
-    setKoSetup(next); flash_("⏳ Đang lưu...");
-    await syncSet(KEYS.k,next); flash_("✓ Đã lưu trận");
-  };
-
-  // manual refresh
   const doRefresh = () => {
     setSyncing(true);
-    gsGetAll().then(all=>{
-      if(all){
-        if(all[KEYS.p]) setPlayers(all[KEYS.p]);
-        if(all[KEYS.v]) setVotes(all[KEYS.v]);
-        if(all[KEYS.r]) setResults(all[KEYS.r]);
-        if(all[KEYS.k]) setKoSetup(all[KEYS.k]);
-        setLastSync(new Date());
-        flash_("✓ Đã đồng bộ!");
-      }
-      setSyncing(false);
+    sGetAll().then(all => {
+      if (all[KEYS.p]) setPlayers(all[KEYS.p]);
+      if (all[KEYS.v]) setVotes(all[KEYS.v]);
+      if (all[KEYS.r]) setResults(all[KEYS.r]);
+      if (all[KEYS.k]) setKoSetup(all[KEYS.k]);
+      setSyncing(false); flash_("✓ Đã đồng bộ!");
     });
   };
 
-  // scores
+  const addPlayer = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    if (players.find(p=>p.name.toLowerCase()===name.toLowerCase())) { flash_("Tên đã tồn tại!"); return; }
+    const next = [...players, { id:"p"+Date.now(), name }];
+    setPlayers(next); setNewName(""); flash_("⏳ Đang lưu...");
+    await sync(KEYS.p, next); flash_("✓ Đã thêm "+name);
+  };
+  const removePl = async id => {
+    const next = players.filter(p=>p.id!==id);
+    setPlayers(next); if(activeId===id) setActiveId(null);
+    await sync(KEYS.p, next);
+  };
+
+  const handlePick = async (mid, pick) => {
+    if (!activeId) { flash_("Chọn người chơi trước!"); return; }
+    const cur = (votes[mid]||{})[activeId];
+    const next = {...votes, [mid]:{...(votes[mid]||{}), [activeId]: cur===pick ? null : pick}};
+    setVotes(next); flash_("⏳ Đang lưu...");
+    await sync(KEYS.v, next);
+    flash_(cur===pick ? "↩ Bỏ chọn" : "✓ Đã chọn");
+  };
+
+  const saveResult = async mid => {
+    const s = scoreIn[mid]||{};
+    const h = parseInt(s.h??""), a = parseInt(s.a??"");
+    if (isNaN(h)||isNaN(a)||h<0||a<0) { flash_("Nhập tỉ số hợp lệ!"); return; }
+    const next = {...results, [mid]:{h,a}};
+    setResults(next); flash_("⏳ Đang lưu...");
+    await sync(KEYS.r, next); flash_("✓ Đã lưu kết quả");
+  };
+  const clearResult = async mid => {
+    const next = {...results}; delete next[mid];
+    setResults(next); await sync(KEYS.r, next); flash_("✓ Đã xóa");
+  };
+
+  const saveKo = async mid => {
+    const k = koIn[mid]||{};
+    if (!k.home||!k.away) { flash_("Nhập tên 2 đội!"); return; }
+    const next = {...koSetup, [mid]:{home:k.home, away:k.away, handicap:parseFloat(k.handicap||"0")||0}};
+    setKoSetup(next); flash_("⏳ Đang lưu...");
+    await sync(KEYS.k, next); flash_("✓ Đã lưu trận");
+  };
+
   const calcScores = () => {
-    const sc={};
-    players.forEach(p=>{sc[p.id]={name:p.name,profit:0,won:0,lost:0,hw:0,hl:0,push:0,total:0};});
-    ALL_MATCHES.forEach(m=>{
-      const res=results[m.id]; if(!res) return;
-      const isKo=!!m.slot;
-      const setup=isKo?koSetup[m.id]:null;
-      if(isKo&&!setup) return;
-      const hcap=isKo?setup.handicap:m.handicap;
-      const stake=ROUNDS[m.round].stake;
-      players.forEach(p=>{
-        const pick=(votes[m.id]||{})[p.id]; if(!pick) return;
+    const sc = {};
+    players.forEach(p=>{ sc[p.id]={name:p.name,profit:0,won:0,lost:0,hw:0,hl:0,push:0,total:0}; });
+    ALL_MATCHES.forEach(m => {
+      const res = results[m.id]; if(!res) return;
+      const isKo = !!m.slot;
+      const setup = isKo ? koSetup[m.id] : null;
+      if (isKo && !setup) return;
+      const hcap = isKo ? setup.handicap : m.handicap;
+      const stake = ROUNDS[m.round].stake;
+      players.forEach(p => {
+        const pick = (votes[m.id]||{})[p.id]; if(!pick) return;
         sc[p.id].total++;
-        const outcome=calcOutcome(res.h,res.a,hcap,pick);
-        const profit=calcProfit(outcome,stake);
-        sc[p.id].profit+=profit;
-        if(outcome==="win") sc[p.id].won++;
-        else if(outcome==="lose") sc[p.id].lost++;
-        else if(outcome==="half_win") sc[p.id].hw++;
-        else if(outcome==="half_lose") sc[p.id].hl++;
+        const outcome = calcOutcome(res.h, res.a, hcap, pick);
+        sc[p.id].profit += calcProfit(outcome, stake);
+        if (outcome==="win") sc[p.id].won++;
+        else if (outcome==="lose") sc[p.id].lost++;
+        else if (outcome==="half_win") sc[p.id].hw++;
+        else if (outcome==="half_lose") sc[p.id].hl++;
         else sc[p.id].push++;
       });
     });
     return sc;
   };
 
-  const activePl=players.find(p=>p.id===activeId);
-  const scores=calcScores();
-  const ranked=Object.entries(scores).sort((a,b)=>b[1].profit-a[1].profit);
-  const doneCount=ALL_MATCHES.filter(m=>results[m.id]).length;
-  const allDates=[...new Set(GROUP_MATCHES.map(m=>m.date))];
+  const activePl = players.find(p=>p.id===activeId);
+  const scores = calcScores();
+  const ranked = Object.entries(scores).sort((a,b)=>b[1].profit-a[1].profit);
+  const doneCount = ALL_MATCHES.filter(m=>results[m.id]).length;
+  const allDates = [...new Set(GROUP_MATCHES.map(m=>m.date))];
+  const curMatches = roundF==="group"
+    ? (dateF==="all" ? GROUP_MATCHES : GROUP_MATCHES.filter(m=>m.date===dateF))
+    : KO_MATCHES.filter(m=>m.round===roundF);
 
-  // ── render 1 trận ──
+  const Toast = flash ? (
+    <div style={{position:"fixed",bottom:70,left:"50%",transform:"translateX(-50%)",
+      background:"#1e293b",color:"#f1f5f9",padding:"8px 20px",borderRadius:20,
+      fontSize:13,fontWeight:600,zIndex:999,border:"1px solid #334155",whiteSpace:"nowrap"}}>
+      {flash}
+    </div>
+  ) : null;
+
   const renderMatch = m => {
-    const isKo=!!m.slot;
-    const setup=isKo?koSetup[m.id]:null;
-    const ready=!isKo||(setup&&setup.home&&setup.away);
-    const mHome=isKo?(setup?.home||""):m.home;
-    const mAway=isKo?(setup?.away||""):m.away;
-    const mH=isKo?(setup?.handicap??0):m.handicap;
-    const res=results[m.id];
-    const myPick=(votes[m.id]||{})[activeId];
-    const stake=ROUNDS[m.round].stake;
-    const isOk=!!res;
-    let outcome=null,profit=null;
-    if(isOk&&myPick&&ready){
-      outcome=calcOutcome(res.h,res.a,mH,myPick);
-      profit=calcProfit(outcome,stake);
+    const isKo = !!m.slot;
+    const setup = isKo ? koSetup[m.id] : null;
+    const ready = !isKo || (setup?.home && setup?.away);
+    const mHome = isKo ? (setup?.home||"") : m.home;
+    const mAway = isKo ? (setup?.away||"") : m.away;
+    const mH = isKo ? (setup?.handicap??0) : m.handicap;
+    const res = results[m.id];
+    const myPick = (votes[m.id]||{})[activeId];
+    const stake = ROUNDS[m.round].stake;
+    const isOk = !!res;
+    let outcome=null, profit=null;
+    if (isOk && myPick && ready) {
+      outcome = calcOutcome(res.h, res.a, mH, myPick);
+      profit = calcProfit(outcome, stake);
     }
-    const od=outcome?OD[outcome]:null;
+    const od = outcome ? OD[outcome] : null;
 
-    return React.createElement("div",{key:m.id,style:{
-      ...S.mc,
-      borderColor:od?(profit>0?"#10b981":profit<0?"#ef4444":profit===0&&od?"#94a3b8":"#1e293b"):"#1e293b",
-    }},
-      // header
-      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:4}},
-        React.createElement("span",{style:{color:"#475569",fontSize:10}},
-          isKo?`${ROUNDS[m.round].label} • ${m.slot} • ${m.date} ${m.time}`
-              :`Nhóm ${m.group} • ${m.date} ${m.time}`),
-        React.createElement("span",{style:{color:"#f59e0b",fontSize:10,fontWeight:700}},
-          `±${stake} cốc bia`)
-      ),
-      // ko: label chờ
-      isKo&&!setup&&React.createElement("div",{style:{color:"#334155",fontSize:11,fontStyle:"italic",marginBottom:4}},m.label),
-      // teams + score
-      ready&&React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}},
-        React.createElement("span",{style:{fontWeight:700,fontSize:14,color:"#f1f5f9",flex:1}},mHome),
-        React.createElement("div",{style:{padding:"2px 10px",textAlign:"center"}},
-          isOk
-            ?React.createElement("span",{style:{color:"#60a5fa",fontWeight:800,fontSize:17}},`${res.h} – ${res.a}`)
-            :React.createElement("span",{style:{color:"#334155",fontSize:11}},"vs")
-        ),
-        React.createElement("span",{style:{fontWeight:700,fontSize:14,color:"#f1f5f9",flex:1,textAlign:"right"}},mAway)
-      ),
-      // handicap badge
-      ready&&React.createElement("div",{style:{textAlign:"center",marginBottom:8}},
-        React.createElement("span",{style:{display:"inline-block",padding:"2px 12px",borderRadius:20,
-          background:"#1e293b",color:"#fbbf24",fontSize:11,fontWeight:700}},
-          "Kèo ",hLabel(mH),
-          mH!==0&&React.createElement("span",{style:{color:"#64748b",fontWeight:400}},
-            mH<0?` (nhà chấp ${Math.abs(mH)})`:` (nhà được ${mH})`)
-        )
-      ),
-      // pick buttons
-      ready&&React.createElement("div",{style:{display:"flex",gap:8,marginBottom:6}},
-        ["home","away"].map(side=>{
-          const isPick=myPick===side;
-          const hcap=side==="home"?mH:-mH;
-          const label=side==="home"?mHome:mAway;
-          return React.createElement("button",{key:side,
-            onClick:()=>handlePick(m.id,side),
-            style:{flex:1,padding:"10px 6px",borderRadius:10,
-              border:`2px solid ${isPick?PC[side]:"#1e293b"}`,
-              background:isPick?PB[side]:"#0f172a",color:isPick?PC[side]:"#64748b",
-              cursor:"pointer",transition:"all .15s",textAlign:"center"}},
-            React.createElement("div",{style:{fontSize:10,marginBottom:2,opacity:.7}},
-              side==="home"?"Chọn đội nhà":"Chọn đội khách"),
-            React.createElement("div",{style:{fontWeight:700,fontSize:13,marginBottom:2,
-              color:isPick?PC[side]:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
-              label.substring(0,12)),
-            React.createElement("div",{style:{fontSize:10,color:"#fbbf24"}},`kèo ${hLabel(hcap)}`),
-            React.createElement("div",{style:{fontSize:10,marginTop:2,
-              color:isPick?"#86efac":"#334155"}},
-              isPick?`Thắng: +${stake} cốc bia / Thua: -${stake} cốc bia`:`±${stake} cốc bia`)
-          );
-        })
-      ),
-      // outcome banner
-      od&&React.createElement("div",{style:{textAlign:"center",fontSize:12,fontWeight:700,
-        padding:"6px",borderRadius:8,background:od.bg,color:od.color,marginBottom:6}},
-        `${od.icon} ${od.label} • ${fmt(profit)}`
-      ),
-      // picks của người khác
-      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:4,marginTop:2}},
-        players.filter(p=>p.id!==activeId).map(p=>{
-          const pv=(votes[m.id]||{})[p.id]; if(!pv) return null;
-          let po=null;
-          if(isOk&&ready) po=calcOutcome(res.h,res.a,mH,pv);
-          const won=po&&(po==="win"||po==="half_win");
-          const lost=po&&(po==="lose"||po==="half_lose");
-          return React.createElement("span",{key:p.id,style:{fontSize:10,padding:"2px 7px",
-            borderRadius:20,background:PB[pv],color:PC[pv]}},
-            `${p.name}: ${pv==="home"?"Nhà":"Khách"}${won?" ✅":lost?" ❌":po==="push"?" ↩":""}`
-          );
-        })
-      )
+    return (
+      <div key={m.id} style={{...S.mc, borderColor: od ? (profit>0?"#10b981":profit<0?"#ef4444":"#94a3b8") : "#1e293b"}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+          <span style={{color:"#475569",fontSize:10}}>
+            {isKo ? `${ROUNDS[m.round].label} • ${m.slot} • ${m.date}` : `Nhóm ${m.group} • ${m.date} ${m.time}`}
+          </span>
+          <span style={{color:"#f59e0b",fontSize:10,fontWeight:700}}>±{stake} cốc bia</span>
+        </div>
+
+        {isKo && !setup && <div style={{color:"#334155",fontSize:11,fontStyle:"italic",marginBottom:4}}>{m.label}</div>}
+
+        {ready && <>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+            <span style={{fontWeight:700,fontSize:14,color:"#f1f5f9",flex:1}}>{mHome}</span>
+            <div style={{padding:"2px 10px",textAlign:"center"}}>
+              {isOk
+                ? <span style={{color:"#60a5fa",fontWeight:800,fontSize:17}}>{res.h} – {res.a}</span>
+                : <span style={{color:"#334155",fontSize:11}}>vs</span>}
+            </div>
+            <span style={{fontWeight:700,fontSize:14,color:"#f1f5f9",flex:1,textAlign:"right"}}>{mAway}</span>
+          </div>
+          <div style={{textAlign:"center",marginBottom:8}}>
+            <span style={{display:"inline-block",padding:"2px 12px",borderRadius:20,
+              background:"#1e293b",color:"#fbbf24",fontSize:11,fontWeight:700}}>
+              Kèo {hLabel(mH)}
+              {mH!==0 && <span style={{color:"#64748b",fontWeight:400}}>{mH<0?` (nhà chấp ${Math.abs(mH)})`:` (nhà được ${mH})`}</span>}
+            </span>
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:6}}>
+            {["home","away"].map(side => {
+              const isPick = myPick===side;
+              const hcap = side==="home" ? mH : -mH;
+              return (
+                <button key={side} onClick={()=>handlePick(m.id,side)} style={{
+                  flex:1,padding:"10px 6px",borderRadius:10,textAlign:"center",
+                  border:`2px solid ${isPick?PC[side]:"#1e293b"}`,
+                  background:isPick?PB[side]:"#0f172a",color:isPick?PC[side]:"#64748b",cursor:"pointer"}}>
+                  <div style={{fontSize:10,marginBottom:2,opacity:.7}}>{side==="home"?"Đội nhà":"Đội khách"}</div>
+                  <div style={{fontWeight:700,fontSize:13,color:isPick?PC[side]:"#94a3b8",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {(side==="home"?mHome:mAway).substring(0,14)}
+                  </div>
+                  <div style={{fontSize:10,color:"#fbbf24",marginTop:2}}>kèo {hLabel(hcap)}</div>
+                  <div style={{fontSize:10,marginTop:2,color:isPick?"#86efac":"#334155"}}>
+                    {isPick ? `T: +${stake} / T: -${stake} cốc` : `±${stake} cốc`}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {od && (
+            <div style={{textAlign:"center",fontSize:12,fontWeight:700,padding:"6px",
+              borderRadius:8,background:od.bg,color:od.color,marginBottom:6}}>
+              {od.icon} {od.label} • {fmtC(profit)} bia
+            </div>
+          )}
+        </>}
+
+        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+          {players.filter(p=>p.id!==activeId).map(p => {
+            const pv = (votes[m.id]||{})[p.id]; if(!pv) return null;
+            let po = null;
+            if (isOk && ready) po = calcOutcome(res.h, res.a, mH, pv);
+            const won = po && (po==="win"||po==="half_win");
+            const lost = po && (po==="lose"||po==="half_lose");
+            return (
+              <span key={p.id} style={{fontSize:10,padding:"2px 7px",borderRadius:20,
+                background:PB[pv],color:PC[pv]}}>
+                {p.name}: {pv==="home"?"Nhà":"Khách"}{won?" ✅":lost?" ❌":po==="push"?" ↩":""}
+              </span>
+            );
+          })}
+        </div>
+      </div>
     );
   };
 
-  const Toast=flash?React.createElement("div",{style:{
-    position:"fixed",bottom:70,left:"50%",transform:"translateX(-50%)",
-    background:"#1e293b",color:"#f1f5f9",padding:"8px 20px",borderRadius:20,
-    fontSize:13,fontWeight:600,zIndex:999,border:"1px solid #334155",whiteSpace:"nowrap"
-  }},flash):null;
-
-  // ══ HOME ══════════════════════════════════════════════════════════════════
-  if(screen==="home") return React.createElement("div",{style:S.root},Toast,
-    React.createElement("div",{style:S.hero},
-      React.createElement("div",{style:{fontSize:44}},"🏆"),
-      React.createElement("h1",{style:S.heroTitle},"WC 2026"),
-      React.createElement("div",{style:{color:"#94a3b8",fontSize:11,marginTop:2}},
-        "Cá cược kèo chấp • "+GROUP_MATCHES.length+" vòng bảng + "+KO_MATCHES.length+" vòng loại"),
-      React.createElement("div",{style:{display:"flex",justifyContent:"center",gap:10,marginTop:10,flexWrap:"wrap"}},
-        Object.entries(ROUNDS).map(([k,v])=>
-          React.createElement("div",{key:k,style:{textAlign:"center"}},
-            React.createElement("div",{style:{color:"#f59e0b",fontWeight:700,fontSize:11}},`±${v.stake} cốc bia`),
-            React.createElement("div",{style:{color:"#475569",fontSize:9}},v.label)
-          )
-        )
-      )
-    ),
-    React.createElement("div",{style:S.card},
-      React.createElement("div",{style:S.lbl},"👥 Người chơi"),
-      React.createElement("div",{style:{display:"flex",gap:8,marginBottom:10}},
-        React.createElement("input",{placeholder:"Nhập tên...",value:newName,
-          onChange:e=>setNewName(e.target.value),onKeyDown:e=>e.key==="Enter"&&addPlayer(),
-          style:{...S.inp,flex:1}}),
-        React.createElement("button",{style:S.btnAdd,onClick:addPlayer},"＋")
-      ),
-      players.length===0&&React.createElement("div",{style:{color:"#334155",fontSize:12,textAlign:"center",padding:"6px 0"}},"Thêm người chơi để bắt đầu"),
-      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
-        players.map(p=>{
-          const sc=scores[p.id];
-          return React.createElement("div",{key:p.id,
-            style:{display:"flex",alignItems:"center",gap:5,padding:"6px 12px",borderRadius:20,cursor:"pointer",
-              background:activeId===p.id?"#1e3a5f":"#0f172a",
-              border:`1.5px solid ${activeId===p.id?"#3b82f6":"#1e293b"}`},
-            onClick:()=>setActiveId(activeId===p.id?null:p.id)},
-            React.createElement("span",{style:{color:activeId===p.id?"#60a5fa":"#94a3b8",fontSize:13,fontWeight:activeId===p.id?700:400}},p.name),
-            sc&&sc.total>0&&React.createElement("span",{style:{fontSize:10,fontWeight:700,
-              color:sc.profit>0?"#10b981":sc.profit<0?"#ef4444":"#94a3b8"}},fmtK(sc.profit)),
-            React.createElement("span",{style:{color:"#334155",fontSize:11,marginLeft:2},
-              onClick:e=>{e.stopPropagation();removePl(p.id);}},"✕")
-          );
-        })
-      ),
-      activePl&&React.createElement("div",{style:{marginTop:8,color:"#10b981",fontSize:12}},
-        "✅ Đang xem: ",React.createElement("b",null,activePl.name))
-    ),
-    React.createElement("div",{style:{display:"flex",gap:10,padding:"0 14px 24px"}},
-      React.createElement("button",{style:S.navBtn,onClick:()=>setScreen("vote")},
-        React.createElement("span",{style:{fontSize:24}},"🎯"),
-        React.createElement("span",null,"Đặt kèo")),
-      React.createElement("button",{style:S.navBtn,onClick:()=>setScreen("board")},
-        React.createElement("span",{style:{fontSize:24}},"📊"),
-        React.createElement("span",null,"Bảng điểm"),
-        doneCount>0&&React.createElement("span",{style:{fontSize:10,color:"#f59e0b"}},doneCount+" xong")),
-      React.createElement("button",{style:{...S.navBtn,background:"#111827"},onClick:()=>setScreen("admin")},
-        React.createElement("span",{style:{fontSize:24}},"⚙️"),
-        React.createElement("span",null,"Admin"))
-    ),
-    React.createElement("div",{style:{textAlign:"center",padding:"0 14px 20px"}},
-      !gsReady
-        ?React.createElement("div",{style:{background:"#450a0a",borderRadius:10,padding:"10px 14px",color:"#fca5a5",fontSize:12}},
-            "⚠️ Chưa cấu hình Google Sheets URL. Mở file HTML, tìm GS_URL và paste URL Apps Script vào.")
-        :React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
-            React.createElement("div",{style:{fontSize:11,color:syncing?"#f59e0b":"#334155"}},
-              syncing?"⏳ Đang đồng bộ...":lastSync?"✓ Sync "+lastSync.toLocaleTimeString("vi-VN"):"Chưa sync"),
-            React.createElement("button",{
-              style:{padding:"4px 10px",borderRadius:20,border:"1px solid #1e293b",
-                background:"#0f172a",color:"#60a5fa",cursor:"pointer",fontSize:11},
-              onClick:doRefresh},syncing?"...":"🔄 Refresh")
-          )
-    )
+  if (loading) return (
+    <div style={{background:"#070d1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{color:"#60a5fa",fontSize:16}}>⚽ Đang tải...</div>
+    </div>
   );
 
-  // ══ VOTE ══════════════════════════════════════════════════════════════════
-  const curMatches=roundF==="group"
-    ?(dateF==="all"?GROUP_MATCHES:GROUP_MATCHES.filter(m=>m.date===dateF))
-    :KO_MATCHES.filter(m=>m.round===roundF);
+  // ── HOME ──
+  if (screen==="home") return (
+    <div style={S.root}>
+      {Toast}
+      <div style={S.hero}>
+        <div style={{fontSize:44}}>🏆</div>
+        <h1 style={S.heroTitle}>WC 2026</h1>
+        <div style={{color:"#94a3b8",fontSize:11,marginTop:2}}>Cá cược kèo chấp • {GROUP_MATCHES.length} vòng bảng + {KO_MATCHES.length} vòng loại</div>
+        <div style={{display:"flex",justifyContent:"center",gap:10,marginTop:10,flexWrap:"wrap"}}>
+          {Object.entries(ROUNDS).map(([k,v])=>(
+            <div key={k} style={{textAlign:"center"}}>
+              <div style={{color:"#f59e0b",fontWeight:700,fontSize:11}}>±{v.stake} cốc</div>
+              <div style={{color:"#475569",fontSize:9}}>{v.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
-  if(screen==="vote") return React.createElement("div",{style:S.root},Toast,
-    React.createElement("div",{style:S.topBar},
-      React.createElement("button",{style:S.back,onClick:()=>setScreen("home")},"← Về"),
-      React.createElement("span",{style:{color:"#f1f5f9",fontSize:14,fontWeight:600}},
-        activePl?"🎯 "+activePl.name:"🎯 Đặt kèo"),
-      React.createElement("span",null)
-    ),
-    !activePl&&React.createElement("div",{style:S.warn},"⚠️ Về trang chủ để chọn người chơi"),
-    // round tabs
-    React.createElement("div",{style:{padding:"8px 14px 0",display:"flex",gap:6,overflowX:"auto"}},
-      [["group","Vòng bảng"],["r32","1/32"],["r16","1/16"],["qf","Tứ kết"],["sf","Bán kết"],["final","CK"]].map(([r,l])=>
-        React.createElement("button",{key:r,style:{...S.tab,...(roundF===r?S.tabOn:{})},onClick:()=>setRoundF(r)},l)
-      )
-    ),
-    // date filter
-    roundF==="group"&&React.createElement("div",{style:{padding:"6px 14px 2px",display:"flex",gap:6,overflowX:"auto"}},
-      ["all",...allDates].map(d=>
-        React.createElement("button",{key:d,style:{...S.tab,...(dateF===d?S.tabOn:{})},onClick:()=>setDateF(d)},
-          d==="all"?"Tất cả":d)
-      )
-    ),
-    React.createElement("div",{style:{padding:"6px 12px 100px"}},
-      curMatches.map(m=>renderMatch(m))
-    )
+      <div style={S.card}>
+        <div style={S.lbl}>👥 Người chơi</div>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          <input placeholder="Nhập tên..." value={newName}
+            onChange={e=>setNewName(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&addPlayer()}
+            style={{...S.inp,flex:1}}/>
+          <button style={S.btnAdd} onClick={addPlayer}>＋</button>
+        </div>
+        {players.length===0 && <div style={{color:"#334155",fontSize:12,textAlign:"center",padding:"6px 0"}}>Thêm người chơi để bắt đầu</div>}
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {players.map(p => {
+            const sc = scores[p.id];
+            return (
+              <div key={p.id} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 12px",
+                borderRadius:20,cursor:"pointer",
+                background:activeId===p.id?"#1e3a5f":"#0f172a",
+                border:`1.5px solid ${activeId===p.id?"#3b82f6":"#1e293b"}`}}
+                onClick={()=>setActiveId(activeId===p.id?null:p.id)}>
+                <span style={{color:activeId===p.id?"#60a5fa":"#94a3b8",fontSize:13,fontWeight:activeId===p.id?700:400}}>{p.name}</span>
+                {sc && sc.total>0 && <span style={{fontSize:10,fontWeight:700,color:sc.profit>0?"#10b981":sc.profit<0?"#ef4444":"#94a3b8"}}>{fmtC(sc.profit)}</span>}
+                <span style={{color:"#334155",fontSize:11}} onClick={e=>{e.stopPropagation();removePl(p.id);}}>✕</span>
+              </div>
+            );
+          })}
+        </div>
+        {activePl && <div style={{marginTop:8,color:"#10b981",fontSize:12}}>✅ Đang xem: <b>{activePl.name}</b></div>}
+      </div>
+
+      <div style={{display:"flex",gap:10,padding:"0 14px 16px"}}>
+        <button style={S.navBtn} onClick={()=>setScreen("vote")}><span style={{fontSize:24}}>🎯</span><span>Đặt kèo</span></button>
+        <button style={S.navBtn} onClick={()=>setScreen("board")}>
+          <span style={{fontSize:24}}>📊</span><span>Bảng điểm</span>
+          {doneCount>0 && <span style={{fontSize:10,color:"#f59e0b"}}>{doneCount} xong</span>}
+        </button>
+        <button style={{...S.navBtn,background:"#111827"}} onClick={()=>setScreen("admin")}><span style={{fontSize:24}}>⚙️</span><span>Admin</span></button>
+      </div>
+
+      <div style={{textAlign:"center",padding:"0 14px 20px",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+        <span style={{fontSize:11,color:syncing?"#f59e0b":"#334155"}}>{syncing?"⏳ Đang đồng bộ...":"🌐 Shared • tự sync 20s"}</span>
+        <button onClick={doRefresh} style={{padding:"4px 10px",borderRadius:20,border:"1px solid #1e293b",
+          background:"#0f172a",color:"#60a5fa",cursor:"pointer",fontSize:11}}>
+          {syncing?"...":"🔄"}
+        </button>
+      </div>
+    </div>
   );
 
-  // ══ BOARD ═════════════════════════════════════════════════════════════════
-  if(screen==="board") return React.createElement("div",{style:S.root},Toast,
-    React.createElement("div",{style:S.topBar},
-      React.createElement("button",{style:S.back,onClick:()=>setScreen("home")},"← Về"),
-      React.createElement("span",{style:{color:"#f1f5f9",fontSize:14,fontWeight:600}},"📊 Bảng điểm"),
-      React.createElement("span",null)
-    ),
-    React.createElement("div",{style:{padding:"12px 14px 80px"}},
-      React.createElement("div",{style:{color:"#475569",fontSize:11,textAlign:"center",marginBottom:12}},
-        `${doneCount} / ${ALL_MATCHES.length} trận đã có kết quả`),
-      ranked.length===0&&React.createElement("div",{style:{color:"#334155",textAlign:"center",padding:"40px 0"}},"Chưa có người chơi"),
-      ranked.map(([id,s],i)=>
-        React.createElement("div",{key:id,style:{...S.mc,display:"flex",alignItems:"center",gap:12,
-          borderColor:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#cd7f32":"#1e293b"}},
-          React.createElement("div",{style:{width:36,height:36,borderRadius:"50%",flexShrink:0,
-            background:i===0?"#78350f":i===1?"#1e293b":i===2?"#292524":"#0f172a",
-            color:i===0?"#f59e0b":i===1?"#e2e8f0":i===2?"#cd7f32":"#475569",
-            display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:i<3?18:14}},
-            i===0?"🥇":i===1?"🥈":i===2?"🥉":"#"+(i+1)),
-          React.createElement("div",{style:{flex:1}},
-            React.createElement("div",{style:{color:"#f1f5f9",fontWeight:700,fontSize:15}},s.name),
-            React.createElement("div",{style:{color:"#64748b",fontSize:11,marginTop:2}},
-              `✅${s.won}W ${s.hw?s.hw+"½W ":""}❌${s.lost}L ${s.hl?s.hl+"½L ":""}${s.push?"↩"+s.push+" ":""}• ${s.total} cược`)
-          ),
-          React.createElement("div",{style:{textAlign:"right"}},
-            React.createElement("div",{style:{fontWeight:800,fontSize:18,
-              color:s.profit>0?"#10b981":s.profit<0?"#ef4444":"#94a3b8"}},
-              fmtK(s.profit)),
-            React.createElement("div",{style:{color:"#334155",fontSize:10}},fmt(s.profit))
-          )
-        )
-      ),
-      // chi tiết
-      doneCount>0&&React.createElement(React.Fragment,null,
-        React.createElement("div",{style:{color:"#1e3a5f",fontSize:11,fontWeight:600,margin:"20px 0 8px",letterSpacing:1}},"── CHI TIẾT TỪNG TRẬN ──"),
-        ALL_MATCHES.filter(m=>results[m.id]).map(m=>{
-          const isKo=!!m.slot;
-          const setup=isKo?koSetup[m.id]:null;
-          if(isKo&&!setup) return null;
-          const mHome=isKo?setup.home:m.home;
-          const mAway=isKo?setup.away:m.away;
-          const mH=isKo?setup.handicap:m.handicap;
-          const res=results[m.id];
-          const stake=ROUNDS[m.round].stake;
-          return React.createElement("div",{key:m.id,style:{...S.mc,padding:"10px 12px"}},
-            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:4}},
-              React.createElement("span",{style:{color:"#94a3b8",fontSize:12,fontWeight:600}},
-                `${mHome} `,React.createElement("span",{style:{color:"#60a5fa"}},`${res.h}–${res.a}`),` ${mAway}`),
-              React.createElement("span",{style:{color:"#64748b",fontSize:10}},`kèo ${hLabel(mH)} • ±${stake/1000}k`)
-            ),
-            React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:4}},
-              players.map(p=>{
-                const pick=(votes[m.id]||{})[p.id];
-                if(!pick) return React.createElement("span",{key:p.id,style:{fontSize:10,color:"#334155"}},p.name+": –");
-                const outcome=calcOutcome(res.h,res.a,mH,pick);
-                const profit=calcProfit(outcome,stake);
-                const od=OD[outcome];
-                return React.createElement("span",{key:p.id,style:{fontSize:10,padding:"3px 8px",
-                  borderRadius:20,background:od.bg,color:od.color}},
-                  `${p.name} ${od.icon} ${fmtK(profit)}`);
-              })
-            )
-          );
-        })
-      )
-    )
+  // ── VOTE ──
+  if (screen==="vote") return (
+    <div style={S.root}>
+      {Toast}
+      <div style={S.topBar}>
+        <button style={S.back} onClick={()=>setScreen("home")}>← Về</button>
+        <span style={{color:"#f1f5f9",fontSize:14,fontWeight:600}}>{activePl?"🎯 "+activePl.name:"🎯 Đặt kèo"}</span>
+        <button onClick={doRefresh} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:12}}>{syncing?"⏳":"🔄"}</button>
+      </div>
+      {!activePl && <div style={S.warn}>⚠️ Về trang chủ để chọn người chơi</div>}
+      <div style={{padding:"8px 14px 0",display:"flex",gap:6,overflowX:"auto"}}>
+        {[["group","Vòng bảng"],["r32","1/32"],["r16","1/16"],["qf","Tứ kết"],["sf","Bán kết"],["final","CK"]].map(([r,l])=>(
+          <button key={r} style={{...S.tab,...(roundF===r?S.tabOn:{})}} onClick={()=>setRoundF(r)}>{l}</button>
+        ))}
+      </div>
+      {roundF==="group" && (
+        <div style={{padding:"6px 14px 2px",display:"flex",gap:6,overflowX:"auto"}}>
+          {["all",...allDates].map(d=>(
+            <button key={d} style={{...S.tab,...(dateF===d?S.tabOn:{})}} onClick={()=>setDateF(d)}>{d==="all"?"Tất cả":d}</button>
+          ))}
+        </div>
+      )}
+      <div style={{padding:"6px 12px 100px"}}>{curMatches.map(m=>renderMatch(m))}</div>
+    </div>
   );
 
-  // ══ ADMIN ═════════════════════════════════════════════════════════════════
-  const adminMatches=roundF==="group"?GROUP_MATCHES:KO_MATCHES.filter(m=>m.round===roundF);
+  // ── BOARD ──
+  if (screen==="board") return (
+    <div style={S.root}>
+      {Toast}
+      <div style={S.topBar}>
+        <button style={S.back} onClick={()=>setScreen("home")}>← Về</button>
+        <span style={{color:"#f1f5f9",fontSize:14,fontWeight:600}}>📊 Bảng điểm</span>
+        <button onClick={doRefresh} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:12}}>{syncing?"⏳":"🔄"}</button>
+      </div>
+      <div style={{padding:"12px 14px 80px"}}>
+        <div style={{color:"#475569",fontSize:11,textAlign:"center",marginBottom:12}}>{doneCount} / {ALL_MATCHES.length} trận đã có kết quả</div>
+        {ranked.length===0 && <div style={{color:"#334155",textAlign:"center",padding:"40px 0"}}>Chưa có người chơi</div>}
+        {ranked.map(([id,s],i)=>(
+          <div key={id} style={{...S.mc,display:"flex",alignItems:"center",gap:12,
+            borderColor:i===0?"#f59e0b":i===1?"#94a3b8":i===2?"#cd7f32":"#1e293b"}}>
+            <div style={{width:36,height:36,borderRadius:"50%",flexShrink:0,
+              background:i===0?"#78350f":i===1?"#1e293b":i===2?"#292524":"#0f172a",
+              color:i===0?"#f59e0b":i===1?"#e2e8f0":i===2?"#cd7f32":"#475569",
+              display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:i<3?18:14}}>
+              {i===0?"🥇":i===1?"🥈":i===2?"🥉":"#"+(i+1)}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{color:"#f1f5f9",fontWeight:700,fontSize:15}}>{s.name}</div>
+              <div style={{color:"#64748b",fontSize:11,marginTop:2}}>
+                ✅{s.won} {s.hw?s.hw+"½W ":""}❌{s.lost} {s.hl?s.hl+"½L ":""}{s.push?"↩"+s.push+" ":""} • {s.total} cược
+              </div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:800,fontSize:18,color:s.profit>0?"#10b981":s.profit<0?"#ef4444":"#94a3b8"}}>
+                {fmtC(s.profit)}
+              </div>
+              <div style={{color:"#475569",fontSize:10}}>cốc bia</div>
+            </div>
+          </div>
+        ))}
 
-  if(screen==="admin") return React.createElement("div",{style:S.root},Toast,
-    React.createElement("div",{style:S.topBar},
-      React.createElement("button",{style:S.back,onClick:()=>setScreen("home")},"← Về"),
-      React.createElement("span",{style:{color:"#f1f5f9",fontSize:14,fontWeight:600}},"⚙️ Admin"),
-      React.createElement("span",null)
-    ),
-    !adminOk
-      ?React.createElement("div",{style:{padding:20}},
-          React.createElement("div",{style:{background:"#111827",borderRadius:12,padding:20}},
-            React.createElement("div",{style:{color:"#94a3b8",fontSize:14,marginBottom:12}},"Mật khẩu admin:"),
-            React.createElement("input",{type:"password",placeholder:"Nhập mật khẩu...",value:adminPw,
-              onChange:e=>setAdminPw(e.target.value),
-              onKeyDown:e=>{if(e.key==="Enter") adminPw===ADMIN_PW?setAdminOk(true):flash_("Sai!");},
-              style:{...S.inp,width:"100%",marginBottom:12}}),
-            React.createElement("button",{style:{...S.navBtn,width:"100%",justifyContent:"center"},
-              onClick:()=>adminPw===ADMIN_PW?setAdminOk(true):flash_("Sai mật khẩu!")},"Đăng nhập"),
-            React.createElement("div",{style:{color:"#334155",fontSize:11,textAlign:"center",marginTop:8}},"Mặc định: wc2026")
-          ))
-      :React.createElement("div",null,
-          // tabs
-          React.createElement("div",{style:{padding:"8px 14px 4px",display:"flex",gap:6,overflowX:"auto",borderBottom:"1px solid #0f172a"}},
-            [["group","Vòng bảng"],["r32","1/32"],["r16","1/16"],["qf","Tứ kết"],["sf","Bán kết"],["final","CK"]].map(([r,l])=>
-              React.createElement("button",{key:r,style:{...S.tab,...(roundF===r?S.tabOn:{})},onClick:()=>setRoundF(r)},l)
-            )
-          ),
-          React.createElement("div",{style:{color:"#10b981",fontSize:11,textAlign:"center",padding:"6px 0"}},
-            `✅ ${doneCount}/${ALL_MATCHES.length} trận đã nhập`),
-          React.createElement("div",{style:{padding:"4px 12px 100px"}},
-            adminMatches.map(m=>{
-              const isKo=!!m.slot;
-              const res=results[m.id];
-              const setup=isKo?koSetup[m.id]:null;
-              const si=scoreIn[m.id]||{h:res?.h??"",a:res?.a??""};
-              const ki=koIn[m.id]||{home:setup?.home??"",away:setup?.away??"",handicap:String(setup?.handicap??0)};
-              return React.createElement("div",{key:m.id,style:{...S.mc,borderColor:res?"#1e3a5f":"#1e293b",marginBottom:8}},
-                // header
-                React.createElement("div",{style:{color:"#475569",fontSize:10,marginBottom:4}},
-                  isKo?`${ROUNDS[m.round].label} • ${m.slot} • ${m.date} ${m.time}`
-                      :`Nhóm ${m.group} • ${m.date} ${m.time}`),
+        {doneCount>0 && <>
+          <div style={{color:"#1e3a5f",fontSize:11,fontWeight:600,margin:"20px 0 8px"}}>── CHI TIẾT TỪNG TRẬN ──</div>
+          {ALL_MATCHES.filter(m=>results[m.id]).map(m=>{
+            const isKo = !!m.slot;
+            const setup = isKo ? koSetup[m.id] : null;
+            if (isKo && !setup) return null;
+            const mHome = isKo ? setup.home : m.home;
+            const mAway = isKo ? setup.away : m.away;
+            const mH = isKo ? setup.handicap : m.handicap;
+            const res = results[m.id];
+            const stake = ROUNDS[m.round].stake;
+            return (
+              <div key={m.id} style={{...S.mc,padding:"10px 12px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{color:"#94a3b8",fontSize:12,fontWeight:600}}>
+                    {mHome} <span style={{color:"#60a5fa"}}>{res.h}–{res.a}</span> {mAway}
+                  </span>
+                  <span style={{color:"#64748b",fontSize:10}}>kèo {hLabel(mH)} • ±{stake}🍺</span>
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {players.map(p=>{
+                    const pick = (votes[m.id]||{})[p.id];
+                    if (!pick) return <span key={p.id} style={{fontSize:10,color:"#334155"}}>{p.name}: –</span>;
+                    const outcome = calcOutcome(res.h, res.a, mH, pick);
+                    const profit = calcProfit(outcome, stake);
+                    const od = OD[outcome];
+                    return (
+                      <span key={p.id} style={{fontSize:10,padding:"3px 8px",borderRadius:20,background:od.bg,color:od.color}}>
+                        {p.name} {od.icon} {fmtC(profit)}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </>}
+      </div>
+    </div>
+  );
 
-                // KO: nhập đội + kèo
-                isKo&&React.createElement("div",null,
-                  React.createElement("div",{style:{color:"#64748b",fontSize:11,marginBottom:6,fontStyle:"italic"}},m.label),
-                  React.createElement("div",{style:{display:"flex",gap:6,marginBottom:6,flexWrap:"wrap"}},
-                    React.createElement("input",{placeholder:"Đội nhà (vd: 🇫🇷 Pháp)",value:ki.home,
-                      onChange:e=>setKoIn({...koIn,[m.id]:{...ki,home:e.target.value}}),
-                      style:{...S.inp,flex:1,minWidth:100}}),
-                    React.createElement("input",{placeholder:"Đội khách",value:ki.away,
-                      onChange:e=>setKoIn({...koIn,[m.id]:{...ki,away:e.target.value}}),
-                      style:{...S.inp,flex:1,minWidth:100}})
-                  ),
-                  React.createElement("div",{style:{display:"flex",gap:6,alignItems:"flex-end",marginBottom:6}},
-                    React.createElement("div",null,
-                      React.createElement("div",{style:{color:"#475569",fontSize:9,marginBottom:2}},"Kèo chấp (nhà)"),
-                      React.createElement("input",{type:"number",step:"0.25",placeholder:"0",value:ki.handicap,
-                        onChange:e=>setKoIn({...koIn,[m.id]:{...ki,handicap:e.target.value}}),
-                        style:{...S.inp,width:80,textAlign:"center"}})),
-                    React.createElement("button",{style:{...S.btnAdd,padding:"7px 14px",fontSize:12},onClick:()=>saveKo(m.id)},"💾 Lưu")
-                  ),
-                  setup&&React.createElement("div",{style:{color:"#10b981",fontSize:11,marginBottom:6}},
-                    `✓ ${setup.home} vs ${setup.away} | kèo ${hLabel(setup.handicap)}`)
-                ),
+  // ── ADMIN ──
+  const adminMatches = roundF==="group" ? GROUP_MATCHES : KO_MATCHES.filter(m=>m.round===roundF);
 
-                // Group: tên trận
-                !isKo&&React.createElement("div",{style:{color:"#f1f5f9",fontSize:13,fontWeight:600,marginBottom:6}},
-                  `${m.home} `,
-                  React.createElement("span",{style:{color:"#fbbf24",fontSize:11,fontWeight:400}},`(${hLabel(m.handicap)})`),
-                  ` vs ${m.away}`),
+  if (screen==="admin") return (
+    <div style={S.root}>
+      {Toast}
+      <div style={S.topBar}>
+        <button style={S.back} onClick={()=>setScreen("home")}>← Về</button>
+        <span style={{color:"#f1f5f9",fontSize:14,fontWeight:600}}>⚙️ Admin</span>
+        <span/>
+      </div>
+      {!adminOk ? (
+        <div style={{padding:20}}>
+          <div style={{background:"#111827",borderRadius:12,padding:20}}>
+            <div style={{color:"#94a3b8",fontSize:14,marginBottom:12}}>Mật khẩu admin:</div>
+            <input type="password" placeholder="Nhập mật khẩu..." value={adminPw}
+              onChange={e=>setAdminPw(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter") adminPw===ADMIN_PW?setAdminOk(true):flash_("Sai!");}}
+              style={{...S.inp,width:"100%",marginBottom:12}}/>
+            <button style={{...S.navBtn,width:"100%",justifyContent:"center"}}
+              onClick={()=>adminPw===ADMIN_PW?setAdminOk(true):flash_("Sai mật khẩu!")}>Đăng nhập</button>
+            <div style={{color:"#334155",fontSize:11,textAlign:"center",marginTop:8}}>Mặc định: wc2026</div>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{padding:"8px 14px 4px",display:"flex",gap:6,overflowX:"auto",borderBottom:"1px solid #0f172a"}}>
+            {[["group","Vòng bảng"],["r32","1/32"],["r16","1/16"],["qf","Tứ kết"],["sf","Bán kết"],["final","CK"]].map(([r,l])=>(
+              <button key={r} style={{...S.tab,...(roundF===r?S.tabOn:{})}} onClick={()=>setRoundF(r)}>{l}</button>
+            ))}
+          </div>
+          <div style={{color:"#10b981",fontSize:11,textAlign:"center",padding:"6px 0"}}>{doneCount}/{ALL_MATCHES.length} trận đã nhập</div>
+          <div style={{padding:"4px 12px 100px"}}>
+            {adminMatches.map(m => {
+              const isKo = !!m.slot;
+              const res = results[m.id];
+              const setup = isKo ? koSetup[m.id] : null;
+              const si = scoreIn[m.id] || {h:res?.h??"", a:res?.a??""};
+              const ki = koIn[m.id] || {home:setup?.home??"", away:setup?.away??"", handicap:String(setup?.handicap??0)};
+              return (
+                <div key={m.id} style={{...S.mc,borderColor:res?"#1e3a5f":"#1e293b",marginBottom:8}}>
+                  <div style={{color:"#475569",fontSize:10,marginBottom:4}}>
+                    {isKo ? `${ROUNDS[m.round].label} • ${m.slot} • ${m.date}` : `Nhóm ${m.group} • ${m.date} ${m.time}`}
+                  </div>
 
-                // Nhập tỉ số
-                React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
-                  React.createElement("span",{style:{color:"#64748b",fontSize:11}},"Tỉ số:"),
-                  React.createElement("input",{type:"number",min:0,max:20,placeholder:"Nhà",value:si.h,
-                    onChange:e=>setScoreIn({...scoreIn,[m.id]:{...si,h:e.target.value}}),
-                    style:{...S.inp,width:52,textAlign:"center"}}),
-                  React.createElement("span",{style:{color:"#475569",fontWeight:700}},"–"),
-                  React.createElement("input",{type:"number",min:0,max:20,placeholder:"Khách",value:si.a,
-                    onChange:e=>setScoreIn({...scoreIn,[m.id]:{...si,a:e.target.value}}),
-                    style:{...S.inp,width:52,textAlign:"center"}}),
-                  React.createElement("button",{style:{...S.btnAdd,padding:"7px 12px",fontSize:12},onClick:()=>saveResult(m.id)},"✓ Lưu"),
-                  res&&React.createElement("button",{
-                    style:{padding:"7px 10px",borderRadius:8,border:"none",background:"#1e293b",color:"#ef4444",cursor:"pointer",fontSize:12},
-                    onClick:()=>clearResult(m.id)},"✕")
-                ),
+                  {isKo && (
+                    <div>
+                      <div style={{color:"#64748b",fontSize:11,marginBottom:6,fontStyle:"italic"}}>{m.label}</div>
+                      <div style={{display:"flex",gap:6,marginBottom:6,flexWrap:"wrap"}}>
+                        <input placeholder="Đội nhà" value={ki.home}
+                          onChange={e=>setKoIn({...koIn,[m.id]:{...ki,home:e.target.value}})}
+                          style={{...S.inp,flex:1,minWidth:100}}/>
+                        <input placeholder="Đội khách" value={ki.away}
+                          onChange={e=>setKoIn({...koIn,[m.id]:{...ki,away:e.target.value}})}
+                          style={{...S.inp,flex:1,minWidth:100}}/>
+                      </div>
+                      <div style={{display:"flex",gap:6,alignItems:"flex-end",marginBottom:6}}>
+                        <div>
+                          <div style={{color:"#475569",fontSize:9,marginBottom:2}}>Kèo chấp</div>
+                          <input type="number" step="0.25" placeholder="0" value={ki.handicap}
+                            onChange={e=>setKoIn({...koIn,[m.id]:{...ki,handicap:e.target.value}})}
+                            style={{...S.inp,width:80,textAlign:"center"}}/>
+                        </div>
+                        <button style={{...S.btnAdd,padding:"7px 14px",fontSize:12}} onClick={()=>saveKo(m.id)}>💾 Lưu</button>
+                      </div>
+                      {setup && <div style={{color:"#10b981",fontSize:11,marginBottom:6}}>✓ {setup.home} vs {setup.away} | kèo {hLabel(setup.handicap)}</div>}
+                    </div>
+                  )}
 
-                // Preview
-                res&&React.createElement("div",{style:{marginTop:8}},
-                  React.createElement("div",{style:{color:"#60a5fa",fontSize:12,marginBottom:4}},
-                    "Tỉ số: ",React.createElement("b",null,`${res.h} – ${res.a}`)),
-                  React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:4}},
-                    players.map(p=>{
-                      const pick=(votes[m.id]||{})[p.id];
-                      if(!pick) return React.createElement("span",{key:p.id,style:{fontSize:10,color:"#334155"}},p.name+": –");
-                      const mH2=isKo?(setup?.handicap??0):m.handicap;
-                      const outcome=calcOutcome(res.h,res.a,mH2,pick);
-                      const profit=calcProfit(outcome,ROUNDS[m.round].stake);
-                      const od=OD[outcome];
-                      return React.createElement("span",{key:p.id,style:{fontSize:10,padding:"2px 8px",
-                        borderRadius:20,background:od.bg,color:od.color}},
-                        `${p.name} ${od.icon} ${fmtK(profit)}`);
-                    })
-                  )
-                )
+                  {!isKo && (
+                    <div style={{color:"#f1f5f9",fontSize:13,fontWeight:600,marginBottom:6}}>
+                      {m.home} <span style={{color:"#fbbf24",fontSize:11,fontWeight:400}}>({hLabel(m.handicap)})</span> vs {m.away}
+                    </div>
+                  )}
+
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{color:"#64748b",fontSize:11}}>Tỉ số:</span>
+                    <input type="number" min={0} max={20} placeholder="Nhà" value={si.h}
+                      onChange={e=>setScoreIn({...scoreIn,[m.id]:{...si,h:e.target.value}})}
+                      style={{...S.inp,width:52,textAlign:"center"}}/>
+                    <span style={{color:"#475569",fontWeight:700}}>–</span>
+                    <input type="number" min={0} max={20} placeholder="Khách" value={si.a}
+                      onChange={e=>setScoreIn({...scoreIn,[m.id]:{...si,a:e.target.value}})}
+                      style={{...S.inp,width:52,textAlign:"center"}}/>
+                    <button style={{...S.btnAdd,padding:"7px 12px",fontSize:12}} onClick={()=>saveResult(m.id)}>✓ Lưu</button>
+                    {res && <button style={{padding:"7px 10px",borderRadius:8,border:"none",background:"#1e293b",color:"#ef4444",cursor:"pointer",fontSize:12}} onClick={()=>clearResult(m.id)}>✕</button>}
+                  </div>
+
+                  {res && (
+                    <div style={{marginTop:8}}>
+                      <div style={{color:"#60a5fa",fontSize:12,marginBottom:4}}>Tỉ số: <b>{res.h} – {res.a}</b></div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {players.map(p=>{
+                          const pick = (votes[m.id]||{})[p.id];
+                          if (!pick) return <span key={p.id} style={{fontSize:10,color:"#334155"}}>{p.name}: –</span>;
+                          const mH2 = isKo ? (setup?.handicap??0) : m.handicap;
+                          const outcome = calcOutcome(res.h, res.a, mH2, pick);
+                          const profit = calcProfit(outcome, ROUNDS[m.round].stake);
+                          const od = OD[outcome];
+                          return (
+                            <span key={p.id} style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:od.bg,color:od.color}}>
+                              {p.name} {od.icon} {fmtC(profit)}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
-            })
-          )
-        )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 
   return null;
 }
 
-const S={
-  root:{background:"#070d1a",minHeight:"100vh",fontFamily:"'Segoe UI',sans-serif",color:"#f1f5f9",maxWidth:500,margin:"0 auto"},
-  hero:{background:"linear-gradient(150deg,#0c1445,#1a1f5e 50%,#0a2744)",padding:"22px 20px 16px",textAlign:"center",borderBottom:"1px solid #0f172a"},
-  heroTitle:{margin:"4px 0 0",fontSize:26,fontWeight:900,letterSpacing:3,background:"linear-gradient(90deg,#f59e0b,#fbbf24,#f59e0b)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"},
-  card:{margin:"12px 14px",background:"#0d1424",borderRadius:12,padding:"14px",border:"1px solid #1e293b"},
-  lbl:{color:"#64748b",fontSize:11,fontWeight:600,marginBottom:10,letterSpacing:1},
-  inp:{background:"#111827",border:"1px solid #1e293b",borderRadius:8,color:"#f1f5f9",padding:"7px 10px",fontSize:13,outline:"none"},
-  btnAdd:{padding:"7px 14px",borderRadius:8,border:"none",background:"#1e3a5f",color:"#60a5fa",cursor:"pointer",fontSize:14,fontWeight:700},
-  navBtn:{flex:1,padding:"14px 6px",borderRadius:12,background:"linear-gradient(135deg,#1e3a5f,#1a2744)",border:"1px solid #1e3a5f",color:"#93c5fd",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,fontSize:11,fontWeight:600},
-  topBar:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",borderBottom:"1px solid #0f172a",background:"#070d1a",position:"sticky",top:0,zIndex:10},
-  back:{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:13,padding:0},
-  mc:{background:"#0d1424",borderRadius:12,padding:"13px",marginBottom:10,border:"1px solid #1e293b"},
-  warn:{background:"#1e3a5f",borderRadius:10,padding:"10px 14px",margin:"10px 14px",color:"#93c5fd",fontSize:13},
-  tab:{padding:"5px 11px",borderRadius:20,border:"1px solid #1e293b",background:"#0f172a",color:"#475569",cursor:"pointer",fontSize:11,whiteSpace:"nowrap",flexShrink:0},
-  tabOn:{background:"#1e3a5f",color:"#60a5fa",border:"1px solid #3b82f6"},
+const S = {
+  root:      {background:"#070d1a",minHeight:"100vh",fontFamily:"'Segoe UI',sans-serif",color:"#f1f5f9",maxWidth:500,margin:"0 auto"},
+  hero:      {background:"linear-gradient(150deg,#0c1445,#1a1f5e 50%,#0a2744)",padding:"22px 20px 16px",textAlign:"center",borderBottom:"1px solid #0f172a"},
+  heroTitle: {margin:"4px 0 0",fontSize:26,fontWeight:900,letterSpacing:3,background:"linear-gradient(90deg,#f59e0b,#fbbf24,#f59e0b)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"},
+  card:      {margin:"12px 14px",background:"#0d1424",borderRadius:12,padding:"14px",border:"1px solid #1e293b"},
+  lbl:       {color:"#64748b",fontSize:11,fontWeight:600,marginBottom:10,letterSpacing:1},
+  inp:       {background:"#111827",border:"1px solid #1e293b",borderRadius:8,color:"#f1f5f9",padding:"7px 10px",fontSize:13,outline:"none"},
+  btnAdd:    {padding:"7px 14px",borderRadius:8,border:"none",background:"#1e3a5f",color:"#60a5fa",cursor:"pointer",fontSize:14,fontWeight:700},
+  navBtn:    {flex:1,padding:"14px 6px",borderRadius:12,background:"linear-gradient(135deg,#1e3a5f,#1a2744)",border:"1px solid #1e3a5f",color:"#93c5fd",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,fontSize:11,fontWeight:600},
+  topBar:    {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 14px",borderBottom:"1px solid #0f172a",background:"#070d1a",position:"sticky",top:0,zIndex:10},
+  back:      {background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:13,padding:0},
+  mc:        {background:"#0d1424",borderRadius:12,padding:"13px",marginBottom:10,border:"1px solid #1e293b"},
+  warn:      {background:"#1e3a5f",borderRadius:10,padding:"10px 14px",margin:"10px 14px",color:"#93c5fd",fontSize:13},
+  tab:       {padding:"5px 11px",borderRadius:20,border:"1px solid #1e293b",background:"#0f172a",color:"#475569",cursor:"pointer",fontSize:11,whiteSpace:"nowrap",flexShrink:0},
+  tabOn:     {background:"#1e3a5f",color:"#60a5fa",border:"1px solid #3b82f6"},
 };
+
 
 ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
 </script>
